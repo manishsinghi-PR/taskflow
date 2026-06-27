@@ -1225,22 +1225,52 @@ async function doLogout() {
 // ================================================================
 auth.onAuthStateChanged(async user => {
   if (user) {
-    ME = user;
-    let snap = await db.collection('users').doc(user.uid).get();
-    if (!snap.exists) {
-      const role = ADMIN_EMAILS.includes(user.email.toLowerCase()) ? 'admin' : 'agent';
-      await db.collection('users').doc(user.uid).set({
+    try {
+      ME = user;
+      const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
+      MY_ROLE = isAdmin ? 'admin' : 'agent';
+
+      // Try to get or create user document
+      let snap;
+      try {
+        snap = await db.collection('users').doc(user.uid).get();
+      } catch(e) {
+        // If Firestore read fails, still boot the app using auth data
+        console.warn('Could not read user doc:', e.message);
+        snap = { exists: false, data: () => null };
+      }
+
+      if (!snap.exists) {
+        try {
+          await db.collection('users').doc(user.uid).set({
+            name:  user.displayName || user.email.split('@')[0],
+            email: user.email.toLowerCase(),
+            role:  MY_ROLE,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          snap = await db.collection('users').doc(user.uid).get();
+        } catch(e) {
+          console.warn('Could not create user doc:', e.message);
+        }
+      }
+
+      ME_DATA = (snap && snap.exists) ? snap.data() : {
         name:  user.displayName || user.email.split('@')[0],
         email: user.email.toLowerCase(),
-        role,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      snap = await db.collection('users').doc(user.uid).get();
+        role:  MY_ROLE
+      };
+
+      // Admin emails always override role
+      MY_ROLE = isAdmin ? 'admin' : (ME_DATA.role || 'agent');
+      bootApp();
+
+    } catch(e) {
+      console.error('Boot error:', e);
+      // Show auth screen again with error instead of blank page
+      show('auth-screen');
+      hide('app-screen');
+      setAuthMsg('Login error: ' + e.message + ' — Please try again or contact support.');
     }
-    ME_DATA = snap.data();
-    // Admin emails always get admin role regardless
-    MY_ROLE = ADMIN_EMAILS.includes(user.email.toLowerCase()) ? 'admin' : ME_DATA.role;
-    bootApp();
   } else {
     ME = null; ME_DATA = null; MY_ROLE = null;
     show('auth-screen');
